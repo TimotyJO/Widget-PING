@@ -25,6 +25,14 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+
+import re
+# Optional HTTP client for public IP check
+try:
+    import requests  # type: ignore
+    REQUESTS_AVAILABLE = True
+except Exception:
+    REQUESTS_AVAILABLE = False
 # ========== Optional imports & capability flags ==========
 try:
     import tkinter as tk
@@ -144,6 +152,27 @@ def dummy_status() -> str:
     if r < P_UP + P_WARNING:
         return "WARNING"
     return "DOWN"
+
+def get_public_ip() -> str:
+    """Get public IPv4. Primary via ipify; fallback scraping whatismyipaddress.
+    Returns '(gagal cek)' on failure.
+    """
+    if not REQUESTS_AVAILABLE:
+        return "(gagal cek)"
+    try:
+        r = requests.get("https://api.ipify.org?format=json", timeout=6)
+        return r.json().get("ip", "(gagal cek)")
+    except Exception:
+        try:
+            html = requests.get(
+                "https://whatismyipaddress.com/id/ip-saya",
+                timeout=8,
+                headers={"User-Agent": "Mozilla/5.0"},
+            ).text
+            m = re.search(r'(\d{1,3}(?:\.\d{1,3}){3})', html)
+            return m.group(1) if m else "(gagal cek)"
+        except Exception:
+            return "(gagal cek)"
 
 
 def check_target(host: str) -> str:
@@ -501,6 +530,13 @@ if TK_AVAILABLE:
             self.footer = ttk.Label(ctr, text="Menunggu update...", style="Muted.TLabel")
             self.footer.pack(side="left")
 
+            # --- IP Dynamic label ---
+            self.ip_var = tk.StringVar(value="IP Dynamic: (cek...)")
+            self.ip_label = ttk.Label(ctr, textvariable=self.ip_var, style="Muted.TLabel")
+            self.ip_label.pack(side="left", padx=(12, 0))
+            self.last_public_ip = None
+            # mulai watcher IP publik
+            self.after(1200, self.poll_public_ip)
             btns = ttk.Frame(ctr)
             btns.pack(side="right")
             ttk.Button(btns, text="Chart Mingguan", command=self.open_weekly_chart).pack(side="left", padx=(0, 6))
@@ -525,6 +561,31 @@ if TK_AVAILABLE:
                 set_keep_awake(True)
 
         # ===== Helpers =====
+        def poll_public_ip(self):
+            """Check public IP periodically and notify on change."""
+            try:
+                new_ip = get_public_ip()
+                old_ip = self.last_public_ip
+                self.last_public_ip = new_ip
+                try:
+                    self.ip_var.set(f"IP Dynamic: {new_ip}")
+                except Exception:
+                    pass
+                if old_ip and new_ip and old_ip != new_ip and new_ip != "(gagal cek)":
+                    show_popup(self, f"IP Change:\n{old_ip} → {new_ip}", bg="#1e293b", fg="#facc15", ms=3000)
+            except Exception:
+                try:
+                    self.ip_var.set("IP Dynamic: (error)")
+                except Exception:
+                    pass
+            finally:
+                # schedule next check every 30s
+                try:
+                    self.after(30000, self.poll_public_ip)
+                except Exception:
+                    pass
+
+
         def set_dot(self, name: str, status: str):
             info = self.rows[name]
             dot: tk.Label = info["dot"]  # type: ignore
